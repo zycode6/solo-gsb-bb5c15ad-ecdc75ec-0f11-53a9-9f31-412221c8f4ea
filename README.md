@@ -83,6 +83,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `GET` | `/designs` | 列出全部合法设计（摘要，含是否超限） |
 | `GET` | `/designs/{id}` | 按 ID 查询设计及其审计结果 |
 | `GET` | `/designs/{id}/audit` | 按设计 ID 单独查询审计结果 |
+| `POST` | `/designs/{id}/tie-up-suggestions?limit=n` | 单步绑综修复建议：枚举绑综矩阵的单格翻转并重跑审计（`limit` 1～50，默认 50） |
 | `GET` | `/health` | 健康检查 |
 
 ### 示例：提交设计
@@ -139,6 +140,64 @@ curl -s http://localhost:8000/designs/1/audit  # 仅审计结果
 curl -s http://localhost:8000/designs          # 全部设计摘要
 ```
 
+### 示例：单步绑综修复建议
+
+```bash
+curl -s -X POST "http://localhost:8000/designs/1/tie-up-suggestions?limit=5"
+```
+
+读取已入库的设计，**逐一翻转 `tie_up` 的一个 0/1 单元**，并沿用该设计原有的
+`cyclic`、`max_float` 重跑完整审计。只返回违规总数**严格减少**的候选；
+若没有任何单步翻转能改善，返回空列表 `[]`。接口仅做模拟重算，**不会修改
+原设计**。设计 ID 不存在时返回 `404`。
+
+查询参数 `limit` 取值 **1～50**（不传时默认 50），越界返回 `422`。
+
+每条建议包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `treadle_index` | 建议翻转的踏板索引（绑综矩阵行号） |
+| `shaft_index` | 建议翻转的综框索引（绑综矩阵列号） |
+| `new_value` | 翻转后的单元值（原 0 → 1，原 1 → 0） |
+| `remaining_violations` | 翻转后重跑审计的剩余违规总数 |
+| `affected_interlacing_points` | 交织矩阵中取自该单元的格子数 = 踩该踏板的纬纱数 × 穿该综框的经纱数 |
+
+结果按 `remaining_violations`、`affected_interlacing_points`、
+`treadle_index`、`shaft_index` 依次升序**稳定排序**后取前 `limit` 条。
+
+响应（200，以 `max_float=1` 的 2/2 斜纹为例，基线 8 条违规，每个候选
+剩 7 条）：
+
+```json
+[
+  {
+    "treadle_index": 0,
+    "shaft_index": 0,
+    "new_value": 0,
+    "remaining_violations": 7,
+    "affected_interlacing_points": 1
+  },
+  {
+    "treadle_index": 0,
+    "shaft_index": 1,
+    "new_value": 0,
+    "remaining_violations": 7,
+    "affected_interlacing_points": 1
+  }
+]
+```
+
+无改善 / 不存在 ID：
+
+```bash
+curl -s -X POST http://localhost:8000/designs/2/tie-up-suggestions
+# []
+
+curl -s -i -X POST http://localhost:8000/designs/999/tie-up-suggestions
+# HTTP/1.1 404 ...  {"detail":"design 999 not found"}
+```
+
 ### 拒绝情形（HTTP 400，整份设计不入库）
 
 - 绑综矩阵非矩形（各行长度不一致）或含非 0/1 值；
@@ -160,6 +219,7 @@ app/
   models.py  # Pydantic 请求/响应模型
 tests/
   test_weave.py  # 核心逻辑单元测试：python3 tests/test_weave.py
+  test_api.py    # HTTP 接口集成测试（TestClient）：python3 tests/test_api.py
 Dockerfile
 docker-compose.yml
 requirements.txt

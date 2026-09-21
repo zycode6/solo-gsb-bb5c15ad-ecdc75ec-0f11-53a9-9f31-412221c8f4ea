@@ -97,5 +97,19 @@ class DesignSummary(BaseModel):
     created_at: str
 
 
+class TieUpSuggestionOut(BaseModel):
+    treadle_index: int = Field(..., description="建议翻转的踏板索引（绑综行号）")
+    shaft_index: int = Field(..., description="建议翻转的综框索引（绑综列号）")
+    new_value: int = Field(..., description="翻转后的单元值（0 或 1）")
+    remaining_violations: int = Field(
+        ..., description="翻转后按原 cyclic、max_float 重跑审计的剩余违规总数"
+    )
+    affected_interlacing_points: int = Field(
+        ...,
+        description="交织矩阵中取自该绑综单元的格子数"
+        "（踩该踏板的纬纱数 × 穿该综框的经纱数）",
+    )
+
+
 class ErrorOut(BaseModel):
     detail: str

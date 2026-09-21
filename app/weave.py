@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, asdict
 
 
@@ -27,6 +28,20 @@ class FloatViolation:
     yarn_index: int  # 经纱索引（列）或纬纱索引（行）
     start: int       # 连续段起点（对循环合并段，为尾部段的起点）
     length: int      # 连续浮长
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class TieUpSuggestion:
+    """单步绑综修复建议：翻转 tie_up[treadle_index][shaft_index] 后的重审计结果。"""
+
+    treadle_index: int                  # 踏板（绑综行）索引
+    shaft_index: int                    # 综框（绑综列）索引
+    new_value: int                      # 翻转后的 0/1
+    remaining_violations: int           # 重跑完整审计后的违规总数
+    affected_interlacing_points: int    # 交织矩阵中取自该单元的格子数
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -159,3 +174,75 @@ def audit_floats(
                 violations.append(FloatViolation("weft", h, start, length))
 
     return matrix, violations
+
+
+def tie_up_suggestions(
+    threading: list[int],
+    tie_up: list[list[int]],
+    treadling: list[int],
+    max_float: int,
+    cyclic: bool,
+    limit: int | None = None,
+) -> list[TieUpSuggestion]:
+    """枚举单步绑综修复建议。
+
+    逐一翻转 tie_up 的一个 0/1 单元，按原 cyclic、max_float 重跑完整审计；
+    仅保留违规总数严格减少的候选。结果按（剩余违规数、受影响交织点数、
+    踏板索引、综框索引）升序稳定排序，limit 给定时只保留前 limit 个。
+
+    入参 tie_up 不会被修改：每个候选都在其深拷贝上翻转。
+    """
+    # 入参为已入库的合法设计；校验同时给出（踏板数, 综框数）与异常兜底
+    shafts, treadles = validate_design(threading, tie_up, treadling, max_float)
+
+    _, baseline_violations = audit_floats(
+        threading, tie_up, treadling, max_float, cyclic
+    )
+    baseline_count = len(baseline_violations)
+
+    # 交织矩阵中取自 tie_up[t][s] 的格子数 =
+    # 踩到踏板 t 的纬纱数 × 穿在综框 s 的经纱数
+    pick_counts = [0] * treadles
+    for pick in treadling:
+        pick_counts[pick] += 1
+    end_counts = [0] * shafts
+    for shaft in threading:
+        end_counts[shaft] += 1
+
+    candidates: list[TieUpSuggestion] = []
+    for t in range(treadles):
+        for s in range(shafts):
+            candidate_tie_up = deepcopy(tie_up)
+            new_value = 1 - candidate_tie_up[t][s]
+            candidate_tie_up[t][s] = new_value
+
+            _, candidate_violations = audit_floats(
+                threading, candidate_tie_up, treadling, max_float, cyclic
+            )
+            remaining = len(candidate_violations)
+            if remaining >= baseline_count:
+                continue  # 违规总数未严格减少，丢弃
+
+            candidates.append(
+                TieUpSuggestion(
+                    treadle_index=t,
+                    shaft_index=s,
+                    new_value=new_value,
+                    remaining_violations=remaining,
+                    affected_interlacing_points=pick_counts[t] * end_counts[s],
+                )
+            )
+
+    # Python sort 稳定：枚举按 (t, s) 行优先进行，此处显式给出全部四个键，
+    # 完全同键的候选保持枚举次序（即 treadle、shaft 升序）
+    candidates.sort(
+        key=lambda c: (
+            c.remaining_violations,
+            c.affected_interlacing_points,
+            c.treadle_index,
+            c.shaft_index,
+        )
+    )
+    if limit is not None:
+        candidates = candidates[:limit]
+    return candidates
