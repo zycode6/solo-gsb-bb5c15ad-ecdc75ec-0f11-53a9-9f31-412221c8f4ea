@@ -97,5 +97,19 @@ class DesignSummary(BaseModel):
     created_at: str
 
 
+class TieUpSuggestionOut(BaseModel):
+    """单步绑综修复建议：翻转一个 tie_up 单元后违规总数严格减少的候选。"""
+
+    treadle: int = Field(..., description="踏板索引（tie_up 行号）")
+    shaft: int = Field(..., description="综框索引（tie_up 列号）")
+    new_value: Literal[0, 1] = Field(..., description="该单元翻转后的新值")
+    remaining_violations: int = Field(
+        ..., description="翻转后按原 cyclic、max_float 重跑审计的剩余违规总数"
+    )
+    affected_points: int = Field(
+        ..., description="受影响交织点数：翻转前后交织矩阵中取值变化的单元数"
+    )
+
+
 class ErrorOut(BaseModel):
     detail: str

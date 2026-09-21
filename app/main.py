@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from . import db, weave
-from .models import AuditOut, DesignIn, DesignOut, DesignSummary, ErrorOut, Violation
+from .models import (
+    AuditOut,
+    DesignIn,
+    DesignOut,
+    DesignSummary,
+    ErrorOut,
+    TieUpSuggestionOut,
+    Violation,
+)
 
 
 @asynccontextmanager
@@ -107,3 +115,29 @@ def get_audit(design_id: int) -> dict:
     if stored is None:
         raise HTTPException(status_code=404, detail=f"design {design_id} not found")
     return stored["audit"]
+
+
+@app.post(
+    "/designs/{design_id}/tie-up-suggestions",
+    response_model=list[TieUpSuggestionOut],
+    responses={404: {"model": ErrorOut, "description": "设计不存在"}},
+    tags=["designs"],
+)
+def suggest_tie_up(
+    design_id: int,
+    limit: int = Query(default=50, ge=1, le=50, description="返回候选数上限"),
+) -> list[dict]:
+    """单步绑综修复建议：逐一翻转 tie_up 的一个 0/1 单元并按原 cyclic、
+    max_float 重跑完整审计，仅返回违规总数严格减少的候选（不修改原设计）。
+    结果按剩余违规数、受影响交织点数、踏板索引、综框索引升序排列。"""
+    stored = db.get_design(design_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail=f"design {design_id} not found")
+    suggestions = weave.suggest_tie_up_flips(
+        stored["threading"],
+        stored["tie_up"],
+        stored["treadling"],
+        stored["max_float"],
+        stored["cyclic"],
+    )
+    return [s.to_dict() for s in suggestions[:limit]]

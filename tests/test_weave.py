@@ -9,6 +9,7 @@ from app.weave import (  # noqa: E402
     DesignError,
     audit_floats,
     build_interlacing,
+    suggest_tie_up_flips,
     validate_design,
     _runs,
 )
@@ -99,6 +100,48 @@ def test_cyclic_wrap_violation():
           "wrap-around float merged to length 4 starting at 3")
 
 
+def test_tie_up_suggestions_basic():
+    # 列 1 1 0 1 1 循环合并为长度 4 的经向浮长（max_float=2），共 1 条违规
+    threading = [0]
+    tie_up = [[1], [0]]
+    treadling = [0, 0, 1, 0, 0]
+    suggestions = suggest_tie_up_flips(threading, tie_up, treadling, 2, True)
+    # 仅 flip tie_up[0][0] -> 0 可消除违规；受影响点 = 踩踏板 0 的 4 纬 × 1 经
+    check(len(suggestions) == 1, "exactly one improving flip")
+    s = suggestions[0]
+    check(s.treadle == 0 and s.shaft == 0 and s.new_value == 0,
+          "flip tie_up[0][0] to 0")
+    check(s.remaining_violations == 0, "no violations remain after flip")
+    check(s.affected_points == 4, "4 interlacing points affected")
+    # 原设计不被修改
+    check(tie_up == [[1], [0]], "original tie_up unchanged")
+
+
+def test_tie_up_suggestions_ordering():
+    # 3 根经纱各浮 3 纬 + 末纬纬浮 3 经，共 4 条违规；多个单步翻转可改善
+    threading = [0, 1, 1]
+    tie_up = [[1, 1], [0, 0]]
+    treadling = [0, 0, 0, 1]
+    suggestions = suggest_tie_up_flips(threading, tie_up, treadling, 2, False)
+    got = [(s.treadle, s.shaft, s.remaining_violations, s.affected_points)
+           for s in suggestions]
+    # 按 (剩余违规数, 受影响点数, 踏板索引, 综框索引) 升序
+    check(got == [(0, 1, 2, 6), (1, 0, 3, 1), (1, 1, 3, 2), (0, 0, 3, 3)],
+          "suggestions sorted by remaining, affected, treadle, shaft")
+    check(all(s.remaining_violations < 4 for s in suggestions),
+          "all candidates strictly reduce violations")
+    check(tie_up == [[1, 1], [0, 0]], "original tie_up unchanged")
+
+
+def test_tie_up_suggestions_no_improvement():
+    # 平纹无违规：违规数为 0，不存在严格更少的翻转，返回空列表
+    threading = [0, 1, 0, 1]
+    tie_up = [[1, 0], [0, 1]]
+    treadling = [0, 1, 0, 1]
+    check(suggest_tie_up_flips(threading, tie_up, treadling, 2, False) == [],
+          "empty list when no flip improves")
+
+
 def test_validation():
     ok_cases = []
     # 维度不一致：绑综矩阵不是矩形
@@ -146,5 +189,8 @@ if __name__ == "__main__":
     test_cyclic_merge()
     test_cyclic_audit_end_to_end()
     test_cyclic_wrap_violation()
+    test_tie_up_suggestions_basic()
+    test_tie_up_suggestions_ordering()
+    test_tie_up_suggestions_no_improvement()
     test_validation()
     print("all tests passed")

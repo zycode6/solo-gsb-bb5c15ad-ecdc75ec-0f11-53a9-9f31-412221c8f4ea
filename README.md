@@ -4,7 +4,8 @@
 踏板—综框绑综矩阵、逐纬踏综序列与最大浮长后，服务自动生成经纬交织矩阵，
 找出所有超过上限的**经向 / 纬向连续浮长**；纹样声明循环时，自动合并矩阵
 首尾跨边界的连续段。合法设计与审计结果入库，可按 ID 查询；维度不一致或
-索引越界的设计将被整份拒绝（HTTP 400，不入库）。
+索引越界的设计将被整份拒绝（HTTP 400，不入库）。对超限设计，还可请求
+**单步绑综修复建议**：逐一翻转一个绑综单元重跑审计，给出违规减少的候选。
 
 ## 快速启动
 
@@ -83,6 +84,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `GET` | `/designs` | 列出全部合法设计（摘要，含是否超限） |
 | `GET` | `/designs/{id}` | 按 ID 查询设计及其审计结果 |
 | `GET` | `/designs/{id}/audit` | 按设计 ID 单独查询审计结果 |
+| `POST` | `/designs/{id}/tie-up-suggestions` | 单步绑综修复建议：逐一翻转一个绑综单元重跑审计，返回违规减少的候选 |
 | `GET` | `/health` | 健康检查 |
 
 ### 示例：提交设计
@@ -137,6 +139,41 @@ curl -s -X POST http://localhost:8000/designs \
 curl -s http://localhost:8000/designs/1        # 设计 + 审计结果
 curl -s http://localhost:8000/designs/1/audit  # 仅审计结果
 curl -s http://localhost:8000/designs          # 全部设计摘要
+```
+
+### 单步绑综修复建议
+
+`POST http://localhost:8000/designs/{id}/tie-up-suggestions`：读取已入库设计，
+逐一翻转 `tie_up` 的一个 0/1 单元，并按原 `cyclic`、`max_float` 重跑完整审计；
+仅返回**违规总数严格减少**的候选。接口只读计算，**不修改原设计**；设计不存在
+返回 404，无改善时返回空列表 `[]`。
+
+查询参数：`limit`（可选，1～50，默认 50）——返回候选数上限。
+
+每个候选包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `treadle` | 踏板索引（`tie_up` 行号） |
+| `shaft` | 综框索引（`tie_up` 列号） |
+| `new_value` | 该单元翻转后的新值（0 或 1） |
+| `remaining_violations` | 翻转后完整审计的剩余违规总数 |
+| `affected_points` | 受影响交织点数（翻转前后交织矩阵中取值变化的单元数） |
+
+结果按 `remaining_violations` → `affected_points` → `treadle` → `shaft`
+升序稳定排序。
+
+```bash
+curl -s -X POST 'http://localhost:8000/designs/1/tie-up-suggestions?limit=5'
+```
+
+响应（200）：
+
+```json
+[
+  {"treadle": 0, "shaft": 1, "new_value": 0, "remaining_violations": 2, "affected_points": 6},
+  {"treadle": 1, "shaft": 0, "new_value": 1, "remaining_violations": 3, "affected_points": 1}
+]
 ```
 
 ### 拒绝情形（HTTP 400，整份设计不入库）

@@ -32,6 +32,18 @@ class FloatViolation:
         return asdict(self)
 
 
+@dataclass
+class TieUpSuggestion:
+    treadle: int               # 踏板索引（tie_up 行号）
+    shaft: int                 # 综框索引（tie_up 列号）
+    new_value: int             # 该单元翻转后的新值（0 或 1）
+    remaining_violations: int  # 翻转后完整审计的剩余违规总数
+    affected_points: int       # 交织矩阵中取值发生变化的点数
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 def _check_int(value, what: str) -> None:
     # bool 是 int 的子类，单独排除，避免 True/False 被当成合法索引
     if not isinstance(value, int) or isinstance(value, bool):
@@ -159,3 +171,47 @@ def audit_floats(
                 violations.append(FloatViolation("weft", h, start, length))
 
     return matrix, violations
+
+
+def suggest_tie_up_flips(
+    threading: list[int],
+    tie_up: list[list[int]],
+    treadling: list[int],
+    max_float: int,
+    cyclic: bool,
+) -> list[TieUpSuggestion]:
+    """单步绑综修复建议：逐一翻转 tie_up 的一个 0/1 单元，按原 cyclic、max_float
+    重跑完整审计，仅保留违规总数严格减少的候选。
+
+    受影响交织点数 = 翻转前后交织矩阵中取值发生变化的单元数（即所有
+    踩该踏板的纬 × 穿该综框的经 的交叉点）。结果按 (剩余违规数, 受影响点数,
+    踏板索引, 综框索引) 升序稳定排序。不修改传入的 tie_up。
+    """
+    base_matrix, base_violations = audit_floats(
+        threading, tie_up, treadling, max_float, cyclic
+    )
+    base_count = len(base_violations)
+
+    suggestions: list[TieUpSuggestion] = []
+    for t, row in enumerate(tie_up):
+        for s, value in enumerate(row):
+            flipped = [r[:] for r in tie_up]
+            flipped[t][s] = 1 - value
+            matrix, violations = audit_floats(
+                threading, flipped, treadling, max_float, cyclic
+            )
+            if len(violations) >= base_count:
+                continue
+            affected = sum(
+                a != b
+                for row_a, row_b in zip(base_matrix, matrix)
+                for a, b in zip(row_a, row_b)
+            )
+            suggestions.append(
+                TieUpSuggestion(t, s, 1 - value, len(violations), affected)
+            )
+
+    suggestions.sort(
+        key=lambda x: (x.remaining_violations, x.affected_points, x.treadle, x.shaft)
+    )
+    return suggestions
